@@ -92,9 +92,7 @@ class JewelryImagePuller:
         paths_frame = tk.Frame(main_frame, bg=self.colors["bg"])
         paths_frame.pack(fill="x", pady=(0, 20))
 
-        # Source Drive
         self.add_path_row(paths_frame, "SOURCE DRIVE (โฟลเดอร์หลักที่มี Ring, Earring, etc.)", self.source_dir)
-        # Destination
         self.add_path_row(paths_frame, "DESTINATION FOLDER (ที่เก็บรูปปลายทาง)", self.dest_dir)
 
         # Middle Section: Input and Controls
@@ -104,7 +102,12 @@ class JewelryImagePuller:
         # Left: ID Input
         input_frame = tk.Frame(split_frame, bg=self.colors["bg"])
         input_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        tk.Label(input_frame, text="PRODUCT IDS (COPY & PASTE HERE)", fg=self.colors["text_dim"], bg=self.colors["bg"], font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 5))
+        
+        input_header = tk.Frame(input_frame, bg=self.colors["bg"])
+        input_header.pack(fill="x", pady=(0, 5))
+        tk.Label(input_header, text="PRODUCT IDS (COPY & PASTE HERE)", fg=self.colors["text_dim"], bg=self.colors["bg"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        tk.Button(input_header, text="CLEAR ALL", command=lambda: self.id_input.delete("1.0", tk.END), bg="#333333", fg="white", font=("Segoe UI", 7), relief="flat", padx=10).pack(side="right")
+
         self.id_input = scrolledtext.ScrolledText(input_frame, bg="#000000", fg="#ffffff", font=("Consolas", 11), insertbackground="white", relief="flat", padx=10, pady=10)
         self.id_input.pack(fill="both", expand=True)
 
@@ -115,6 +118,11 @@ class JewelryImagePuller:
         self.pull_btn = tk.Button(control_frame, text="🚀 START COPYING", command=self.start_pulling, bg=self.colors["accent"], fg="#121212", font=("Segoe UI", 12, "bold"), relief="flat", height=2)
         self.pull_btn.pack(fill="x", pady=(0, 10))
 
+        btn_row = tk.Frame(control_frame, bg=self.colors["bg"])
+        btn_row.pack(fill="x", pady=(0, 10))
+        self.open_btn = tk.Button(btn_row, text="📂 OPEN DESTINATION", command=self.open_destination, bg="#2d2d2d", fg="white", font=("Segoe UI", 9), relief="flat", height=2)
+        self.open_btn.pack(side="left", fill="x", expand=True, padx=(0, 2))
+        
         tk.Label(control_frame, text="ACTIVITY LOG", fg=self.colors["text_dim"], bg=self.colors["bg"], font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(10, 5))
         self.log_area = scrolledtext.ScrolledText(control_frame, bg="#000000", fg="#dddddd", font=("Consolas", 9), relief="flat", padx=10, pady=10)
         self.log_area.pack(fill="both", expand=True)
@@ -127,6 +135,13 @@ class JewelryImagePuller:
 
         self.progress = ttk.Progressbar(main_frame, orient="horizontal", mode="determinate")
         self.progress.pack(fill="x", pady=(20, 0))
+
+    def open_destination(self):
+        path = self.dest_dir.get()
+        if os.path.exists(path):
+            os.startfile(path) if hasattr(os, 'startfile') else subprocess.run(['open', path])
+        else:
+            messagebox.showwarning("Warning", "Destination folder does not exist.")
 
     def add_path_row(self, parent, label, var):
         frame = tk.Frame(parent, bg=self.colors["card"], padx=15, pady=10, highlightthickness=1, highlightbackground="#333333")
@@ -174,7 +189,7 @@ class JewelryImagePuller:
             for item in items:
                 if item.lower() == name.lower():
                     return os.path.join(parent, item)
-            # Try partial match if exact fails
+            # Try partial match if exact fails (e.g., search for "001-200" in "Ring 001-200")
             for item in items:
                 if name.lower() in item.lower():
                     return os.path.join(parent, item)
@@ -186,18 +201,20 @@ class JewelryImagePuller:
         self.progress['value'] = 0
         success_count = 0
         fail_count = 0
+        missing_ids = []
 
         self.log(f"Starting process for {len(ids)} items...", "info")
 
         for i, product_id in enumerate(ids):
             self.log(f"Processing: {product_id}", "info")
-            found = False
+            found_this_id = False
             try:
                 # 1. Parse ID (e.g., R-10250-00-S00)
                 m = re.search(r'^([A-Z])-(\d+)', product_id.upper())
                 if not m:
                     self.log(f"Invalid format: {product_id}", "error")
                     fail_count += 1
+                    missing_ids.append(f"{product_id} (Invalid Format)")
                     continue
                 
                 type_code = m.group(1)
@@ -207,49 +224,56 @@ class JewelryImagePuller:
                 range_folder_name = f"{p_type} {range_str}"
                 
                 # 2. Build Search Paths
-                # Expected: source / {p_type} / {range_folder_name} / รูปสินค้า
+                # Structure: Source Drive > {Category} > {Category} {Range} > {ProductID}.jpg
                 
                 type_path = self.find_case_insensitive_folder(source, p_type)
                 if not type_path:
-                    self.log(f"Category folder '{p_type}' not found in source.", "error")
+                    self.log(f"Category folder '{p_type}' not found.", "error")
                     fail_count += 1
+                    missing_ids.append(f"{product_id} (Category '{p_type}' missing)")
                     continue
                 
                 range_path = self.find_case_insensitive_folder(type_path, range_folder_name)
                 if not range_path:
-                    # Try just searching for the range string in the category folder
+                    # Try just searching for the range string (e.g., "001-200") in the category folder
                     range_path = self.find_case_insensitive_folder(type_path, range_str)
                     
                 if not range_path:
                     self.log(f"Range folder '{range_folder_name}' not found.", "error")
                     fail_count += 1
+                    missing_ids.append(f"{product_id} (Range '{range_folder_name}' missing)")
                     continue
 
-                # Look for "รูปสินค้า"
-                img_folder = self.find_case_insensitive_folder(range_path, "รูปสินค้า")
-                if not img_folder:
-                    img_folder = range_path # Fallback to range folder itself
-
-                # 3. Search for the file(s)
-                # Search for any file starting with product_id or contains it
+                # 3. Search for the file(s) directly in the Range folder
                 try:
-                    all_files = os.listdir(img_folder)
+                    all_files = os.listdir(range_path)
+                    # Support multiple formats and angles
                     target_files = [f for f in all_files if product_id.upper() in f.upper()]
                     
                     if not target_files:
+                        # Try searching in a "รูปสินค้า" subfolder as a fallback
+                        img_sub = self.find_case_insensitive_folder(range_path, "รูปสินค้า")
+                        if img_sub:
+                            all_files = os.listdir(img_sub)
+                            target_files = [f for f in all_files if product_id.upper() in f.upper()]
+                            range_path = img_sub # Update for copying
+
+                    if not target_files:
                         self.log(f"File not found for {product_id}", "warning")
                         fail_count += 1
+                        missing_ids.append(product_id)
                     else:
                         for f_name in target_files:
-                            src_file = os.path.join(img_folder, f_name)
+                            src_file = os.path.join(range_path, f_name)
                             dst_file = os.path.join(dest, f_name)
                             shutil.copy2(src_file, dst_file)
                             self.log(f"Copied: {f_name}", "success")
-                            success_count += 1
-                        found = True
+                        success_count += 1
+                        found_this_id = True
                 except Exception as e:
                     self.log(f"Error accessing files: {e}", "error")
                     fail_count += 1
+                    missing_ids.append(f"{product_id} (Access Error: {e})")
 
             except Exception as e:
                 self.log(f"Critical error for {product_id}: {e}", "error")
@@ -258,9 +282,25 @@ class JewelryImagePuller:
             self.progress['value'] = i + 1
             self.root.update_idletasks()
 
+        # Save missing report
+        if missing_ids:
+            report_path = os.path.join(dest, f"missing_images_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write("--- MISSING IMAGES REPORT ---\n")
+                f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                for mid in missing_ids:
+                    f.write(f"- {mid}\n")
+            self.log(f"Missing report saved to: {os.path.basename(report_path)}", "highlight")
+
         self.log(f"Done! Success: {success_count}, Failed: {fail_count}", "info")
         self.pull_btn.config(state="normal")
-        messagebox.showinfo("Completed", f"Success: {success_count}\nFailed: {fail_count}")
+        
+        result_msg = f"Process Completed.\n\nSuccessfully found: {success_count} items\nNot found/Error: {fail_count} items"
+        if missing_ids:
+            result_msg += f"\n\nMissing report saved to destination folder."
+            
+        messagebox.showinfo("Summary", result_msg)
+
 
 if __name__ == "__main__":
     root = tk.Tk()
