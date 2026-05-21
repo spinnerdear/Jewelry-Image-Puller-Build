@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from datetime import datetime
 import threading
 import subprocess
+from PIL import Image, ImageTk
 
 # Optional but recommended for Excel support
 try:
@@ -18,7 +19,7 @@ except ImportError:
 class JewelryImagePuller:
     def __init__(self, root):
         self.root = root
-        self.version = "1.4 (Final QA)"
+        self.version = "1.5 (Visual Selection)"
         self.root.title(f"Jewelry Image Puller v{self.version}")
         self.root.geometry("1200x950")
         self.root.configure(bg="#121212")
@@ -29,7 +30,7 @@ class JewelryImagePuller:
         # Paths & Config
         self.config_dir = os.path.join(os.path.expanduser("~"), ".jewelry_image_puller")
         if not os.path.exists(self.config_dir): os.makedirs(self.config_dir)
-        self.config_file = os.path.join(self.config_dir, "config_v1_4.json")
+        self.config_file = os.path.join(self.config_dir, "config_v1_5.json")
 
         self.colors = {
             "bg": "#121212",
@@ -220,13 +221,13 @@ class JewelryImagePuller:
 
         try:
             xl = pd.ExcelFile(file_path)
-            # Support multiple sheets - show selector if more than one
             if len(xl.sheet_names) > 1:
                 sheet_win = tk.Toplevel(self.root); sheet_win.title("Select Sheet"); sheet_win.geometry("300x400"); sheet_win.grab_set()
                 tk.Label(sheet_win, text="CHOOSE SHEET").pack(pady=10)
                 lb = tk.Listbox(sheet_win); lb.pack(fill="both", expand=True, padx=20)
                 for s in xl.sheet_names: lb.insert(tk.END, s)
                 def sel_sheet():
+                    if not lb.curselection(): return
                     s = lb.get(lb.curselection()[0]); sheet_win.destroy(); self.show_column_picker(file_path, s)
                 tk.Button(sheet_win, text="SELECT", command=sel_sheet).pack(pady=10)
             else:
@@ -235,31 +236,20 @@ class JewelryImagePuller:
 
     def show_column_picker(self, file_path, sheet_name):
         try:
-            # Read first 50 rows to find actual headers (skip empty rows/merged headers)
             df_full = pd.read_excel(file_path, sheet_name=sheet_name, nrows=50)
-            
-            # Smart header detection: find the row with the most non-null strings
-            header_row = 0
-            max_cols = 0
+            header_row = 0; max_cols = 0
             for i in range(min(10, len(df_full))):
                 cols_found = df_full.iloc[i].dropna().count()
-                if cols_found > max_cols:
-                    max_cols = cols_found
-                    header_row = i + 1 # read_excel header is 0-indexed relative to file
-
-            # Re-read with detected header
+                if cols_found > max_cols: max_cols = cols_found; header_row = i + 1
             df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row if header_row > 0 else 0)
             columns = [str(c) for c in df.columns if not str(c).startswith("Unnamed")]
-
             picker = tk.Toplevel(self.root); picker.title("Choose Column"); picker.geometry("450x550"); picker.grab_set()
             tk.Label(picker, text="SELECT COLUMN WITH PRODUCT IDS", font=("Segoe UI", 10, "bold")).pack(pady=10)
             lb = tk.Listbox(picker, font=("Consolas", 10)); lb.pack(fill="both", expand=True, padx=20)
             for c in columns: lb.insert(tk.END, c)
-            
             def load():
                 if not lb.curselection(): return
-                col = lb.get(lb.curselection()[0]); picker.destroy()
-                self.process_excel_data(file_path, sheet_name, col, header_row)
+                col = lb.get(lb.curselection()[0]); picker.destroy(); self.process_excel_data(file_path, sheet_name, col, header_row)
             tk.Button(picker, text="IMPORT DATA", command=load, bg=self.colors["accent"], height=2).pack(fill="x", padx=20, pady=20)
         except Exception as e: messagebox.showerror("Error", f"Picker Error: {e}")
 
@@ -270,12 +260,9 @@ class JewelryImagePuller:
                 df = pd.read_excel(file_path, sheet_name=sheet_name, header=header_row if header_row > 0 else 0)
                 raw_ids = df[column_name].dropna().astype(str).tolist()
                 valid_ids = [r.strip() for r in raw_ids if len(r.strip()) > 1]
-                
                 if not valid_ids: messagebox.showwarning("No Data", "No IDs found."); return
-
                 cur = self.id_input.get("1.0", tk.END).strip()
                 combined = (cur + "\n" + "\n".join(valid_ids)) if cur and messagebox.askyesno("Import", "Append to list?") else "\n".join(valid_ids)
-                
                 self.root.after(0, lambda: [self.id_input.delete("1.0", tk.END), self.id_input.insert("1.0", combined)])
                 self.log(f"Imported {len(valid_ids)} IDs.", "success")
             except Exception as e: self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
@@ -283,9 +270,46 @@ class JewelryImagePuller:
 
     def normalize_id(self, raw_id):
         clean = raw_id.strip().upper()
+        # Legacy Code Support: TRK -> R, TEK -> E, etc.
+        legacy = re.search(r'^T([REPNBS])K', clean)
+        if legacy: clean = clean.replace(legacy.group(0), legacy.group(1))
         clean = re.sub(r'^([A-Z])(\d)', r'\1-\2', clean)
         clean = clean.replace(' ', '-'); clean = re.sub(r'-+', '-', clean)
         return clean
+
+    def choose_files_visual(self, product_id, files_paths):
+        if not files_paths: return []
+        if len(files_paths) == 1: return files_paths
+        win = tk.Toplevel(self.root); win.title(f"Select: {product_id}"); win.geometry("950x800"); win.configure(bg="#121212"); win.grab_set()
+        res_paths = []
+        header = tk.Frame(win, bg="#1a1a1f", pady=15); header.pack(fill="x")
+        tk.Label(header, text=f"MULTIPLE VARIATIONS FOR: {product_id}", fg=self.colors["accent"], bg="#1a1a1f", font=("Segoe UI", 12, "bold")).pack()
+        main_scroll = tk.Frame(win, bg="#121212"); main_scroll.pack(fill="both", expand=True, padx=20, pady=10)
+        canvas = tk.Canvas(main_scroll, bg="#121212", highlightthickness=0); canvas.pack(side="left", fill="both", expand=True)
+        scrollbar = ttk.Scrollbar(main_scroll, orient="vertical", command=canvas.yview); scrollbar.pack(side="right", fill="y")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        gallery = tk.Frame(canvas, bg="#121212"); canvas.create_window((0, 0), window=gallery, anchor="nw")
+        chk_vars = []; photo_refs = []; cols = 4; r, c = 0, 0
+        for path in files_paths:
+            try:
+                img = Image.open(path); img.thumbnail((180, 180)); ph = ImageTk.PhotoImage(img); photo_refs.append(ph)
+                f_frame = tk.Frame(gallery, bg="#1e1e1e", padx=5, pady=5, highlightthickness=1, highlightbackground="#333333"); f_frame.grid(row=r, column=c, padx=10, pady=10)
+                lbl = tk.Label(f_frame, image=ph, bg="#1e1e1e", cursor="hand2"); lbl.pack()
+                v = tk.BooleanVar(value=True); chk_vars.append((path, v))
+                tk.Checkbutton(f_frame, text=os.path.basename(path)[:22], variable=v, bg="#1e1e1e", fg="white", selectcolor="#000", font=("Arial", 7)).pack()
+                lbl.bind("<Button-1>", lambda e, var=v: var.set(not var.get()))
+                c += 1
+                if c >= cols: c = 0; r += 1
+            except: pass
+        gallery.update_idletasks(); canvas.config(scrollregion=canvas.bbox("all"))
+        def confirm():
+            for p, v in chk_vars:
+                if v.get(): res_paths.append(p)
+            win.destroy()
+        btn_f = tk.Frame(win, bg="#1a1a1f", pady=20); btn_f.pack(fill="x")
+        tk.Button(btn_f, text="COPY SELECTED", command=confirm, bg=self.colors["accent"], fg="#121212", font=("Segoe UI", 11, "bold"), width=30, height=2).pack()
+        tk.Button(btn_f, text="SKIP", command=win.destroy, bg="#333333", fg="white", width=15).pack(pady=5)
+        self.root.wait_window(win); return res_paths
 
     def start_pulling(self):
         source, dest = self.source_dir.get(), self.dest_dir.get()
@@ -293,7 +317,6 @@ class JewelryImagePuller:
         if not dest or not os.path.exists(dest): messagebox.showwarning("Warning", "Invalid Dest"); return
         ids_text = self.id_input.get("1.0", tk.END).strip()
         if not ids_text: messagebox.showwarning("Warning", "Enter IDs"); return
-        
         with open(os.path.join(self.config_dir, "last_ids.txt"), 'w', encoding='utf-8') as f: f.write(ids_text)
         ids = [i.strip() for i in ids_text.split('\n') if i.strip()]
         self.pull_btn.config(state="disabled")
@@ -324,51 +347,69 @@ class JewelryImagePuller:
         for root, dirs, files in os.walk(start_dir):
             for f in files:
                 if target_id.upper() in f.upper(): matches.append(os.path.join(root, f))
-            if len(matches) > 5: break
+            if len(matches) > 10: break
         return matches
 
     def pull_process(self, ids, source, dest):
         self.progress['maximum'] = len(ids); self.progress['value'] = 0
         success, failed, missing = 0, 0, []
-        self.log(f"Starting Puller v1.4...", "highlight")
+        self.log(f"Starting Pro Puller v1.5...", "highlight")
 
         for i, raw_id in enumerate(ids):
-            p_id = self.normalize_id(raw_id); targets = []
+            p_id = self.normalize_id(raw_id); potential_files = []
             try:
                 m = re.search(r'^([A-Z])-(\d+)', p_id)
                 if not m:
                     self.log(f"Invalid: {p_id}", "error"); failed += 1; missing.append(f"{p_id} (Format)"); continue
                 
-                prefix, num = m.group(1), int(m.group(2))
+                prefix, num_code = m.group(1), m.group(2)
                 p_type = self.type_mapping.get(prefix, "Other")
-                range_s = self.get_range(num)
+                range_s = self.get_range(int(num_code))
+                core_id = f"{prefix}-{num_code}" # Target for smart matching
                 
                 t_path = self.find_case_insensitive(source, p_type)
+                search_dirs = []
                 if t_path:
                     r_path = self.find_case_insensitive(t_path, f"{p_type} {range_s}")
                     if not r_path: r_path = self.find_case_insensitive(t_path, range_s)
                     if r_path:
-                        for item in os.listdir(r_path):
-                            if p_id in item.upper(): targets.append(os.path.join(r_path, item))
-                        if not targets:
-                            sub = self.find_case_insensitive(r_path, "รูปสินค้า")
-                            if sub:
-                                for item in os.listdir(sub):
-                                    if p_id in item.upper(): targets.append(os.path.join(sub, item))
+                        search_dirs.append(r_path)
+                        sub = self.find_case_insensitive(r_path, "รูปสินค้า")
+                        if sub: search_dirs.append(sub)
 
-                if not targets:
-                    self.log(f"Deep searching {p_id}...", "warning")
-                    targets = self.deep_search(source, p_id)
+                for s_dir in search_dirs:
+                    for item in os.listdir(s_dir):
+                        item_path = os.path.join(s_dir, item)
+                        if os.path.isfile(item_path) and core_id in item.upper():
+                            potential_files.append(item_path)
 
-                if not targets:
+                if not potential_files:
+                    self.log(f"Not in range. Deep searching {core_id}...", "warning")
+                    potential_files = self.deep_search(source, core_id)
+
+                if not potential_files:
                     self.log(f"Not Found: {p_id}", "warning"); failed += 1; missing.append(p_id)
                 else:
-                    for s_file in targets:
-                        f_n = os.path.basename(s_file); d_file = os.path.join(dest, f_n)
-                        if os.path.exists(d_file):
-                            b, e = os.path.splitext(f_n); d_file = os.path.join(dest, f"{b}_NEW{e}")
-                        shutil.copy2(s_file, d_file); self.log(f"Copied: {os.path.basename(d_file)}", "success")
-                    success += 1
+                    # SMART LOGIC: If only 1 file and it matches p_id perfectly, just copy.
+                    # Else if multiple versions/customers exist, show visual picker.
+                    potential_files = list(set(potential_files))
+                    exact_matches = [f for f in potential_files if p_id in os.path.basename(f).upper()]
+                    
+                    # If multiple variations exist, always let user choose to be safe
+                    if len(potential_files) > 1:
+                        chosen_files = self.choose_files_visual(p_id, potential_files)
+                    else:
+                        chosen_files = potential_files
+
+                    if chosen_files:
+                        for s_file in chosen_files:
+                            f_n = os.path.basename(s_file); d_file = os.path.join(dest, f_n)
+                            if os.path.exists(d_file):
+                                b, e = os.path.splitext(f_n); d_file = os.path.join(dest, f"{b}_NEW{e}")
+                            shutil.copy2(s_file, d_file); self.log(f"Copied: {os.path.basename(d_file)}", "success")
+                        success += 1
+                    else:
+                        self.log(f"Skipped: {p_id}", "info")
             except Exception as e: self.log(f"Error {p_id}: {e}", "error"); failed += 1
             self.progress['value'] = i + 1; self.root.update_idletasks()
 
@@ -377,11 +418,10 @@ class JewelryImagePuller:
                 f.write("\n".join(missing))
         self.log(f"Done. Found: {success}, Missing: {failed}", "highlight")
         self.pull_btn.config(state="normal")
-        self.root.after(0, lambda: messagebox.showinfo("v1.4 Result", f"Finished!\nSuccess: {success}\nFailed: {failed}"))
+        self.root.after(0, lambda: messagebox.showinfo("v1.5 Result", f"Finished!\nSuccess: {success}\nFailed: {failed}"))
 
     def add_path_row(self, parent, label, var):
-        f = tk.Frame(parent, bg=self.colors["card"], padx=15, pady=8, highlightthickness=1, highlightbackground="#333333")
-        f.pack(fill="x", pady=4)
+        f = tk.Frame(parent, bg=self.colors["card"], padx=15, pady=8, highlightthickness=1, highlightbackground="#333333"); f.pack(fill="x", pady=4)
         tk.Label(f, text=label, fg=self.colors["text_dim"], bg=self.colors["card"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
         r = tk.Frame(f, bg=self.colors["card"]); r.pack(fill="x", pady=(4, 0))
         tk.Entry(r, textvariable=var, font=("Consolas", 9), bg="#121212", fg="#ffffff", relief="flat").pack(side="left", expand=True, fill="x", ipady=5)
