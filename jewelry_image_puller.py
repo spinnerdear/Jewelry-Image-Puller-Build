@@ -108,8 +108,8 @@ class JewelryImagePuller:
         self.add_path_row(paths_frame, "DESTINATION (ที่เก็บรูป)", self.dest_dir)
 
         # Settings Sidebar (Buttons)
-        settings_frame = tk.Frame(top_controls, bg=self.colors["bg"], padx=(20, 0))
-        settings_frame.pack(side="right", fill="y")
+        settings_frame = tk.Frame(top_controls, bg=self.colors["bg"])
+        settings_frame.pack(side="right", fill="y", padx=(20, 0))
         tk.Button(settings_frame, text="⚙ CATEGORIES", command=self.open_category_manager, bg="#2d2d2d", fg="white", font=("Segoe UI", 9, "bold"), relief="flat", width=15, height=2).pack(pady=5)
         tk.Button(settings_frame, text="🗑 CLEAR LOGS", command=self.clear_logs, bg="#2d2d2d", fg="white", font=("Segoe UI", 9), relief="flat", width=15, height=2).pack(pady=5)
 
