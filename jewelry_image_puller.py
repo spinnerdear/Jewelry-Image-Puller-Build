@@ -19,18 +19,19 @@ except ImportError:
 class JewelryImagePuller:
     def __init__(self, root):
         self.root = root
-        self.version = "1.6 (Dual-Code Search)"
+        self.version = "1.7 (Performance Turbo)"
         self.root.title(f"Jewelry Image Puller v{self.version}")
         self.root.geometry("1200x950")
         self.root.configure(bg="#121212")
 
         self.source_dir = tk.StringVar()
         self.dest_dir = tk.StringVar()
+        self.file_cache = {} # Optimization: Cache folder listings
         
         # Paths & Config
         self.config_dir = os.path.join(os.path.expanduser("~"), ".jewelry_image_puller")
         if not os.path.exists(self.config_dir): os.makedirs(self.config_dir)
-        self.config_file = os.path.join(self.config_dir, "config_v1_6.json")
+        self.config_file = os.path.join(self.config_dir, "config_v1_7.json")
 
         self.colors = {
             "bg": "#121212",
@@ -323,48 +324,40 @@ class JewelryImagePuller:
         if not dest or not os.path.exists(dest): messagebox.showwarning("Warning", "Invalid Dest"); return
         ids_text = self.id_input.get("1.0", tk.END).strip()
         if not ids_text: messagebox.showwarning("Warning", "Enter IDs"); return
+        
+        self.file_cache = {} # Reset cache for new run
         with open(os.path.join(self.config_dir, "last_ids.txt"), 'w', encoding='utf-8') as f: f.write(ids_text)
         ids = [i.strip() for i in ids_text.split('\n') if i.strip()]
         self.pull_btn.config(state="disabled")
         threading.Thread(target=self.pull_process, args=(ids, source, dest), daemon=True).start()
 
-    def load_last_ids(self):
-        f = os.path.join(self.config_dir, "last_ids.txt")
-        if os.path.exists(f):
-            with open(f, 'r', encoding='utf-8') as file:
-                self.id_input.delete("1.0", tk.END); self.id_input.insert("1.0", file.read())
+    def get_cached_listdir(self, path):
+        """Optimization: Avoid reading disk repeatedly for the same folder."""
+        if path not in self.file_cache:
+            try: self.file_cache[path] = os.listdir(path)
+            except: self.file_cache[path] = []
+        return self.file_cache[path]
 
-    def get_range(self, num):
-        start = ((num - 1) // 200) * 200 + 1
-        return f"{start:03d}-{start+199:03d}"
-
-    def find_case_insensitive(self, parent, name):
-        try:
-            items = os.listdir(parent)
-            for i in items:
-                if i.lower() == name.lower(): return os.path.join(parent, i)
-            for i in items:
-                if name.lower() in i.lower(): return os.path.join(parent, i)
-        except: pass
-        return None
-
-    def deep_search(self, start_dir, target_id):
+    def deep_search_scoped(self, start_dir, target_patterns):
+        """Fallback search: Limited to the category folder for speed."""
         matches = []
         for root, dirs, files in os.walk(start_dir):
             for f in files:
-                if target_id.upper() in f.upper(): matches.append(os.path.join(root, f))
-            if len(matches) > 10: break
+                f_up = f.upper()
+                if any(p in f_up for p in target_patterns):
+                    matches.append(os.path.join(root, f))
+            if len(matches) > 15: break # Performance Cap per ID
         return matches
 
     def pull_process(self, ids, source, dest):
         self.progress['maximum'] = len(ids); self.progress['value'] = 0
         success, failed, missing = 0, 0, []
-        self.log(f"Starting Pro Puller v1.6 (Dual-Search)...", "highlight")
+        self.log(f"Starting Turbo Puller v1.7...", "highlight")
 
         for i, raw_id in enumerate(ids):
             p_id = self.normalize_id(raw_id); potential_files = []
             try:
-                # 1. Parse Normalized ID (e.g. R-10501)
+                # 1. Parse Normalized ID
                 m = re.search(r'^([A-Z])-(\d+)', p_id)
                 if not m:
                     self.log(f"Invalid Format: {p_id}", "error"); failed += 1; missing.append(f"{p_id} (Format)"); continue
@@ -373,12 +366,12 @@ class JewelryImagePuller:
                 p_type = self.type_mapping.get(prefix, "Other")
                 range_s = self.get_range(int(num_code))
                 
-                # Dual Search Targets: Both Modern and Legacy
+                # Dual Search Targets
                 core_id = f"{prefix}-{num_code}"
                 legacy_core = f"T{prefix}K-{num_code}"
                 search_targets = [core_id, legacy_core]
                 
-                # 2. Path Finding
+                # 2. Targeted Path Finding
                 t_path = self.find_case_insensitive(source, p_type)
                 search_dirs = []
                 if t_path:
@@ -389,20 +382,23 @@ class JewelryImagePuller:
                         sub = self.find_case_insensitive(r_path, "รูปสินค้า")
                         if sub: search_dirs.append(sub)
 
-                # 3. Scanning
+                # 3. Scanning Preferred Directories (Using Cache)
                 for s_dir in search_dirs:
-                    for item in os.listdir(s_dir):
-                        item_path = os.path.join(s_dir, item)
-                        if os.path.isfile(item_path):
-                            item_up = item.upper()
-                            if any(target in item_up for target in search_targets):
-                                potential_files.append(item_path)
+                    files_in_dir = self.get_cached_listdir(s_dir)
+                    for item in files_in_dir:
+                        item_up = item.upper()
+                        if any(target in item_up for target in search_targets):
+                            potential_files.append(os.path.join(s_dir, item))
 
-                # 4. Fallback: Deep Search
-                if not potential_files:
-                    self.log(f"Searching variants for {core_id}...", "info")
-                    for target in search_targets:
-                        potential_files.extend(self.deep_search(source, target))
+                # 4. Fallback: Scoped Deep Search (Category folder only)
+                if not potential_files and t_path:
+                    self.log(f"Range folder failed. Scanning {p_type} folder...", "info")
+                    potential_files = self.deep_search_scoped(t_path, search_targets)
+
+                # 5. Last Resort: Deep Search Root (Only if category folder missing)
+                if not potential_files and not t_path:
+                    self.log(f"Searching entire source for {core_id}...", "warning")
+                    potential_files = self.deep_search_scoped(source, search_targets)
 
                 if not potential_files:
                     self.log(f"Not Found: {p_id}", "warning"); failed += 1; missing.append(p_id)
@@ -418,7 +414,8 @@ class JewelryImagePuller:
                         success += 1
                     else:
                         self.log(f"Skipped: {p_id}", "info")
-            except Exception as e: self.log(f"Error {p_id}: {e}", "error"); failed += 1
+            except Exception as e:
+                self.log(f"Error {p_id}: {e}", "error"); failed += 1
             self.progress['value'] = i + 1; self.root.update_idletasks()
 
         if missing:
@@ -426,7 +423,7 @@ class JewelryImagePuller:
                 f.write("\n".join(missing))
         self.log(f"Done. Found: {success}, Missing: {failed}", "highlight")
         self.pull_btn.config(state="normal")
-        self.root.after(0, lambda: messagebox.showinfo("v1.6 Result", f"Finished!\nSuccess: {success}\nFailed: {failed}"))
+        self.root.after(0, lambda: messagebox.showinfo("v1.7 Result", f"Finished!\nSuccess: {success}\nFailed: {failed}"))
 
     def add_path_row(self, parent, label, var):
         f = tk.Frame(parent, bg=self.colors["card"], padx=15, pady=8, highlightthickness=1, highlightbackground="#333333"); f.pack(fill="x", pady=4)
