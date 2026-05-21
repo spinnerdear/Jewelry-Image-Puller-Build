@@ -1,17 +1,26 @@
 import os
 import re
 import shutil
+import json
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from datetime import datetime
 import threading
+import subprocess
+
+# Optional but recommended for Excel support
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except ImportError:
+    HAS_PANDAS = False
 
 class JewelryImagePuller:
     def __init__(self, root):
         self.root = root
-        self.version = "1.2 (Pro Edition)"
+        self.version = "1.3 (Excel Support)"
         self.root.title(f"Jewelry Image Puller v{self.version}")
-        self.root.geometry("1100x900")
+        self.root.geometry("1100x920")
         self.root.configure(bg="#121212")
 
         self.source_dir = tk.StringVar()
@@ -110,6 +119,7 @@ class JewelryImagePuller:
         # Settings Sidebar (Buttons)
         settings_frame = tk.Frame(top_controls, bg=self.colors["bg"])
         settings_frame.pack(side="right", fill="y", padx=(20, 0))
+        tk.Button(settings_frame, text="📊 IMPORT EXCEL", command=self.import_excel, bg=self.colors["highlight"], fg="#121212", font=("Segoe UI", 9, "bold"), relief="flat", width=15, height=2).pack(pady=5)
         tk.Button(settings_frame, text="⚙ CATEGORIES", command=self.open_category_manager, bg="#2d2d2d", fg="white", font=("Segoe UI", 9, "bold"), relief="flat", width=15, height=2).pack(pady=5)
         tk.Button(settings_frame, text="🗑 CLEAR LOGS", command=self.clear_logs, bg="#2d2d2d", fg="white", font=("Segoe UI", 9), relief="flat", width=15, height=2).pack(pady=5)
 
@@ -248,6 +258,94 @@ class JewelryImagePuller:
             import subprocess
             os.startfile(path) if hasattr(os, 'startfile') else subprocess.run(['open', path])
         else: messagebox.showwarning("Warning", "Destination folder does not exist.")
+
+    def import_excel(self):
+        if not HAS_PANDAS:
+            messagebox.showerror("Error", "Pandas library not found.\nPlease install it using: pip install pandas openpyxl")
+            return
+        
+        file_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx *.xls")])
+        if not file_path: return
+
+        try:
+            # 1. Load Excel to peek headers
+            xl = pd.ExcelFile(file_path)
+            sheet_name = xl.sheet_names[0] # Default to first sheet
+            
+            df_preview = pd.read_excel(file_path, sheet_name=sheet_name, nrows=5)
+            columns = df_preview.columns.tolist()
+
+            # 2. Show Column Selection Window
+            picker = tk.Toplevel(self.root)
+            picker.title("Select Product ID Column")
+            picker.geometry("450x550")
+            picker.configure(bg="#1a1a1f")
+            picker.grab_set()
+
+            tk.Label(picker, text="CHOOSE PRODUCT ID COLUMN", fg=self.colors["accent"], bg="#1a1a1f", font=("Segoe UI", 12, "bold")).pack(pady=20)
+            tk.Label(picker, text=f"File: {os.path.basename(file_path)}", fg="#888888", bg="#1a1a1f", font=("Segoe UI", 8)).pack()
+
+            list_frame = tk.Frame(picker, bg="#1a1a1f")
+            list_frame.pack(padx=30, pady=10, fill="both", expand=True)
+
+            lb = tk.Listbox(list_frame, bg="#000000", fg="#ffffff", font=("Segoe UI", 10), borderwidth=0, highlightthickness=1, highlightbackground="#333333")
+            lb.pack(fill="both", expand=True)
+            for col in columns: lb.insert(tk.END, col)
+
+            def confirm_selection():
+                selection = lb.curselection()
+                if not selection:
+                    messagebox.showwarning("Warning", "Please select a column.")
+                    return
+                
+                selected_col = lb.get(selection[0])
+                picker.destroy()
+                self.process_excel_data(file_path, sheet_name, selected_col)
+
+            tk.Button(picker, text="LOAD DATA", command=confirm_selection, bg=self.colors["accent"], fg="#121212", font=("Segoe UI", 10, "bold"), relief="flat", height=2).pack(fill="x", padx=30, pady=20)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read Excel: {e}")
+
+    def process_excel_data(self, file_path, sheet_name, column_name):
+        def task():
+            try:
+                self.log(f"Reading Excel column: {column_name}...", "info")
+                df = pd.read_excel(file_path, sheet_name=sheet_name, usecols=[column_name])
+                
+                # Filter: Remove empty and clean strings
+                raw_ids = df[column_name].dropna().astype(str).tolist()
+                
+                valid_ids = []
+                for rid in raw_ids:
+                    # Basic cleanup
+                    clean = rid.strip()
+                    if clean and len(clean) > 2: # Ignore very short trash
+                        valid_ids.append(clean)
+                
+                if not valid_ids:
+                    messagebox.showwarning("No Data", "No valid Product IDs found in the selected column.")
+                    return
+
+                # Inject into UI
+                current_text = self.id_input.get("1.0", tk.END).strip()
+                new_text = "\n".join(valid_ids)
+                
+                if current_text:
+                    if messagebox.askyesno("Import", "Add to existing list?\n(No will replace current list)"):
+                        combined = current_text + "\n" + new_text
+                    else:
+                        combined = new_text
+                else:
+                    combined = new_text
+
+                self.root.after(0, lambda: [self.id_input.delete("1.0", tk.END), self.id_input.insert("1.0", combined)])
+                self.log(f"Successfully imported {len(valid_ids)} IDs from Excel.", "success")
+                
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Processing failed: {e}"))
+
+        threading.Thread(target=task, daemon=True).start()
 
     def normalize_id(self, raw_id):
         """Fixes common ID errors: 'R 10250' -> 'R-10250', 'R10250' -> 'R-10250'"""
