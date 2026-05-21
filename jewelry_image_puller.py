@@ -19,7 +19,7 @@ except ImportError:
 class JewelryImagePuller:
     def __init__(self, root):
         self.root = root
-        self.version = "1.5 (Visual Selection)"
+        self.version = "1.6 (Dual-Code Search)"
         self.root.title(f"Jewelry Image Puller v{self.version}")
         self.root.geometry("1200x950")
         self.root.configure(bg="#121212")
@@ -30,7 +30,7 @@ class JewelryImagePuller:
         # Paths & Config
         self.config_dir = os.path.join(os.path.expanduser("~"), ".jewelry_image_puller")
         if not os.path.exists(self.config_dir): os.makedirs(self.config_dir)
-        self.config_file = os.path.join(self.config_dir, "config_v1_5.json")
+        self.config_file = os.path.join(self.config_dir, "config_v1_6.json")
 
         self.colors = {
             "bg": "#121212",
@@ -280,35 +280,41 @@ class JewelryImagePuller:
     def choose_files_visual(self, product_id, files_paths):
         if not files_paths: return []
         if len(files_paths) == 1: return files_paths
-        win = tk.Toplevel(self.root); win.title(f"Select: {product_id}"); win.geometry("950x800"); win.configure(bg="#121212"); win.grab_set()
+        
+        # Visual Gallery Dialog - Compact & One-page feel
+        win = tk.Toplevel(self.root); win.title(f"Select: {product_id}"); win.geometry("980x800"); win.configure(bg="#121212"); win.grab_set()
         res_paths = []
-        header = tk.Frame(win, bg="#1a1a1f", pady=15); header.pack(fill="x")
-        tk.Label(header, text=f"MULTIPLE VARIATIONS FOR: {product_id}", fg=self.colors["accent"], bg="#1a1a1f", font=("Segoe UI", 12, "bold")).pack()
-        main_scroll = tk.Frame(win, bg="#121212"); main_scroll.pack(fill="both", expand=True, padx=20, pady=10)
+        header = tk.Frame(win, bg="#1a1a1f", pady=10); header.pack(fill="x")
+        tk.Label(header, text=f"SELECT IMAGES FOR: {product_id}", fg=self.colors["accent"], bg="#1a1a1f", font=("Segoe UI", 12, "bold")).pack()
+        
+        main_scroll = tk.Frame(win, bg="#121212"); main_scroll.pack(fill="both", expand=True, padx=10, pady=5)
         canvas = tk.Canvas(main_scroll, bg="#121212", highlightthickness=0); canvas.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(main_scroll, orient="vertical", command=canvas.yview); scrollbar.pack(side="right", fill="y")
         canvas.configure(yscrollcommand=scrollbar.set)
         gallery = tk.Frame(canvas, bg="#121212"); canvas.create_window((0, 0), window=gallery, anchor="nw")
-        chk_vars = []; photo_refs = []; cols = 4; r, c = 0, 0
+
+        chk_vars = []; photo_refs = []; cols = 5; r, c = 0, 0; thumb_size = (160, 160)
         for path in files_paths:
             try:
-                img = Image.open(path); img.thumbnail((180, 180)); ph = ImageTk.PhotoImage(img); photo_refs.append(ph)
-                f_frame = tk.Frame(gallery, bg="#1e1e1e", padx=5, pady=5, highlightthickness=1, highlightbackground="#333333"); f_frame.grid(row=r, column=c, padx=10, pady=10)
+                img = Image.open(path); img.thumbnail(thumb_size); ph = ImageTk.PhotoImage(img); photo_refs.append(ph)
+                f_frame = tk.Frame(gallery, bg="#1e1e1e", padx=2, pady=2, highlightthickness=1, highlightbackground="#333333"); f_frame.grid(row=r, column=c, padx=5, pady=5)
                 lbl = tk.Label(f_frame, image=ph, bg="#1e1e1e", cursor="hand2"); lbl.pack()
                 v = tk.BooleanVar(value=True); chk_vars.append((path, v))
-                tk.Checkbutton(f_frame, text=os.path.basename(path)[:22], variable=v, bg="#1e1e1e", fg="white", selectcolor="#000", font=("Arial", 7)).pack()
+                tk.Checkbutton(f_frame, text=os.path.basename(path)[:18], variable=v, bg="#1e1e1e", fg="white", selectcolor="#000", font=("Arial", 7)).pack()
                 lbl.bind("<Button-1>", lambda e, var=v: var.set(not var.get()))
                 c += 1
                 if c >= cols: c = 0; r += 1
             except: pass
         gallery.update_idletasks(); canvas.config(scrollregion=canvas.bbox("all"))
+        
         def confirm():
             for p, v in chk_vars:
                 if v.get(): res_paths.append(p)
             win.destroy()
-        btn_f = tk.Frame(win, bg="#1a1a1f", pady=20); btn_f.pack(fill="x")
-        tk.Button(btn_f, text="COPY SELECTED", command=confirm, bg=self.colors["accent"], fg="#121212", font=("Segoe UI", 11, "bold"), width=30, height=2).pack()
-        tk.Button(btn_f, text="SKIP", command=win.destroy, bg="#333333", fg="white", width=15).pack(pady=5)
+            
+        btn_f = tk.Frame(win, bg="#1a1a1f", pady=15); btn_f.pack(fill="x")
+        tk.Button(btn_f, text="COPY SELECTED", command=confirm, bg=self.colors["accent"], fg="#121212", font=("Segoe UI", 11, "bold"), width=25, height=2).pack(side="left", expand=True, padx=20)
+        tk.Button(btn_f, text="SKIP ALL", command=win.destroy, bg="#333333", fg="white", width=15, height=2).pack(side="right", expand=True, padx=20)
         self.root.wait_window(win); return res_paths
 
     def start_pulling(self):
@@ -353,20 +359,26 @@ class JewelryImagePuller:
     def pull_process(self, ids, source, dest):
         self.progress['maximum'] = len(ids); self.progress['value'] = 0
         success, failed, missing = 0, 0, []
-        self.log(f"Starting Pro Puller v1.5...", "highlight")
+        self.log(f"Starting Pro Puller v1.6 (Dual-Search)...", "highlight")
 
         for i, raw_id in enumerate(ids):
             p_id = self.normalize_id(raw_id); potential_files = []
             try:
+                # 1. Parse Normalized ID (e.g. R-10501)
                 m = re.search(r'^([A-Z])-(\d+)', p_id)
                 if not m:
-                    self.log(f"Invalid: {p_id}", "error"); failed += 1; missing.append(f"{p_id} (Format)"); continue
+                    self.log(f"Invalid Format: {p_id}", "error"); failed += 1; missing.append(f"{p_id} (Format)"); continue
                 
                 prefix, num_code = m.group(1), m.group(2)
                 p_type = self.type_mapping.get(prefix, "Other")
                 range_s = self.get_range(int(num_code))
-                core_id = f"{prefix}-{num_code}" # Target for smart matching
                 
+                # Dual Search Targets: Both Modern and Legacy
+                core_id = f"{prefix}-{num_code}"
+                legacy_core = f"T{prefix}K-{num_code}"
+                search_targets = [core_id, legacy_core]
+                
+                # 2. Path Finding
                 t_path = self.find_case_insensitive(source, p_type)
                 search_dirs = []
                 if t_path:
@@ -377,30 +389,26 @@ class JewelryImagePuller:
                         sub = self.find_case_insensitive(r_path, "รูปสินค้า")
                         if sub: search_dirs.append(sub)
 
+                # 3. Scanning
                 for s_dir in search_dirs:
                     for item in os.listdir(s_dir):
                         item_path = os.path.join(s_dir, item)
-                        if os.path.isfile(item_path) and core_id in item.upper():
-                            potential_files.append(item_path)
+                        if os.path.isfile(item_path):
+                            item_up = item.upper()
+                            if any(target in item_up for target in search_targets):
+                                potential_files.append(item_path)
 
+                # 4. Fallback: Deep Search
                 if not potential_files:
-                    self.log(f"Not in range. Deep searching {core_id}...", "warning")
-                    potential_files = self.deep_search(source, core_id)
+                    self.log(f"Searching variants for {core_id}...", "info")
+                    for target in search_targets:
+                        potential_files.extend(self.deep_search(source, target))
 
                 if not potential_files:
                     self.log(f"Not Found: {p_id}", "warning"); failed += 1; missing.append(p_id)
                 else:
-                    # SMART LOGIC: If only 1 file and it matches p_id perfectly, just copy.
-                    # Else if multiple versions/customers exist, show visual picker.
                     potential_files = list(set(potential_files))
-                    exact_matches = [f for f in potential_files if p_id in os.path.basename(f).upper()]
-                    
-                    # If multiple variations exist, always let user choose to be safe
-                    if len(potential_files) > 1:
-                        chosen_files = self.choose_files_visual(p_id, potential_files)
-                    else:
-                        chosen_files = potential_files
-
+                    chosen_files = self.choose_files_visual(p_id, potential_files)
                     if chosen_files:
                         for s_file in chosen_files:
                             f_n = os.path.basename(s_file); d_file = os.path.join(dest, f_n)
@@ -418,7 +426,7 @@ class JewelryImagePuller:
                 f.write("\n".join(missing))
         self.log(f"Done. Found: {success}, Missing: {failed}", "highlight")
         self.pull_btn.config(state="normal")
-        self.root.after(0, lambda: messagebox.showinfo("v1.5 Result", f"Finished!\nSuccess: {success}\nFailed: {failed}"))
+        self.root.after(0, lambda: messagebox.showinfo("v1.6 Result", f"Finished!\nSuccess: {success}\nFailed: {failed}"))
 
     def add_path_row(self, parent, label, var):
         f = tk.Frame(parent, bg=self.colors["card"], padx=15, pady=8, highlightthickness=1, highlightbackground="#333333"); f.pack(fill="x", pady=4)
