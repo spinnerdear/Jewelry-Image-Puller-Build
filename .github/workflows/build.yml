@@ -10,7 +10,7 @@
                python-version: '3.11'
            - name: Install dependencies
              run: |
-               pip install pyinstaller pandas openpyxl
+               pip install pyinstaller pandas openpyxl xlrd
            - name: Build EXE
              run: |
                pyinstaller --onefile --noconsole jewelry_image_puller.py
