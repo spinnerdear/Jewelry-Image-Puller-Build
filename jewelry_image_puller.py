@@ -140,6 +140,44 @@ class JewelryImagePuller:
         self.id_input = scrolledtext.ScrolledText(input_frame, bg="#000000", fg="#ffffff", font=("Consolas", 11), insertbackground="white", relief="flat", padx=10, pady=10)
         self.id_input.pack(fill="both", expand=True)
 
+        # Enable Shortcuts (Ctrl+C, Ctrl+V, Ctrl+A) and Right-click Menu
+        self.setup_text_widget_enhancements(self.id_input)
+
+    def setup_text_widget_enhancements(self, widget):
+        """Adds standard shortcuts and right-click menu to a text widget."""
+        # Standard Shortcuts
+        widget.bind("<Control-v>", lambda e: self.handle_paste(widget))
+        widget.bind("<Control-V>", lambda e: self.handle_paste(widget))
+        widget.bind("<Control-c>", lambda e: self.handle_copy(widget))
+        widget.bind("<Control-C>", lambda e: self.handle_copy(widget))
+        widget.bind("<Control-a>", lambda e: self.handle_select_all(widget))
+        widget.bind("<Control-A>", lambda e: self.handle_select_all(widget))
+        
+        # Right-click Menu
+        menu = tk.Menu(widget, tearoff=0, bg="#2d2d2d", fg="white", activebackground=self.colors["accent"])
+        menu.add_command(label="Cut", command=lambda: widget.event_generate("<<Cut>>"))
+        menu.add_command(label="Copy", command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Paste", command=lambda: self.handle_paste(widget))
+        menu.add_separator()
+        menu.add_command(label="Select All", command=lambda: self.handle_select_all(widget))
+        
+        def show_menu(event):
+            menu.tk_popup(event.x_root, event.y_root)
+        
+        widget.bind("<Button-3>", show_menu) # Windows right-click
+
+    def handle_paste(self, widget):
+        widget.event_generate("<<Paste>>")
+        return "break" # Prevent double paste
+
+    def handle_copy(self, widget):
+        widget.event_generate("<<Copy>>")
+        return "break"
+
+    def handle_select_all(self, widget):
+        widget.tag_add("sel", "1.0", "end")
+        return "break"
+
         # Right: Logs & Actions
         control_frame = tk.Frame(split_frame, bg=self.colors["bg"])
         control_frame.pack(side="right", fill="both", expand=True, padx=(10, 0))
